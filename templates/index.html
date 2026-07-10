@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TikTok Narrator</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --accent: #ff2e63;
+    --text: #eef0f4;
+    --muted: #9aa0ab;
+    --border: #262a33;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    padding: 40px 16px;
+  }
+  .wrap { width: 100%; max-width: 640px; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  p.sub { color: var(--muted); margin-top: 0; margin-bottom: 28px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+  textarea {
+    width: 100%;
+    min-height: 140px;
+    background: #0f1115;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 0.95rem;
+    resize: vertical;
+    margin-bottom: 16px;
+  }
+  select {
+    width: 100%;
+    background: #0f1115;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 16px;
+    font-size: 0.9rem;
+  }
+  button {
+    width: 100%;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .status { margin-top: 12px; font-size: 0.85rem; color: var(--muted); min-height: 20px; }
+  .error { color: var(--accent); }
+  video {
+    width: 100%;
+    max-width: 300px;
+    border-radius: 12px;
+    display: block;
+    margin: 16px auto 0;
+  }
+  a.download {
+    display: block;
+    text-align: center;
+    margin-top: 12px;
+    color: var(--text);
+    background: #232833;
+    padding: 10px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 0.9rem;
+  }
+  .clip-warning { font-size: 0.8rem; color: var(--muted); margin-top: -8px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>TikTok Narrator</h1>
+  <p class="sub">Paste text, pick a voice, get a narrated gameplay video.</p>
+
+  <div class="panel">
+    <label for="text">Script text</label>
+    <textarea id="text" placeholder="Paste your story or script here..."></textarea>
+
+    <label for="voice">Narrator voice</label>
+    <select id="voice">
+      {% for name, code in voices.items() %}
+      <option value="{{ name }}">{{ name }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="clip">Background clip</label>
+    <select id="clip">
+      <option value="">Random from clips/ folder</option>
+      {% for c in clips %}
+      <option value="{{ c }}">{{ c }}</option>
+      {% endfor %}
+    </select>
+    {% if not clips %}
+    <div class="clip-warning">No clips found. Drop .mp4 files into the <code>clips/</code> folder, then refresh this page.</div>
+    {% endif %}
+
+    <button id="go">Generate video</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <video id="preview" controls style="display:none;"></video>
+  <a id="downloadLink" class="download" style="display:none;" download>Download video</a>
+</div>
+
+<script>
+const goBtn = document.getElementById('go');
+const statusEl = document.getElementById('status');
+const preview = document.getElementById('preview');
+const downloadLink = document.getElementById('downloadLink');
+
+goBtn.addEventListener('click', async () => {
+  const text = document.getElementById('text').value.trim();
+  const voice = document.getElementById('voice').value;
+  const clip = document.getElementById('clip').value;
+
+  if (!text) {
+    statusEl.textContent = 'Paste some text first.';
+    statusEl.className = 'status error';
+    return;
+  }
+
+  goBtn.disabled = true;
+  preview.style.display = 'none';
+  downloadLink.style.display = 'none';
+  statusEl.className = 'status';
+  statusEl.textContent = 'Generating narration and rendering video... this can take a minute.';
+
+  try {
+    const res = await fetch('/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice, clip })
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || 'Something went wrong.');
+    }
+
+    preview.src = data.video_url;
+    preview.style.display = 'block';
+    downloadLink.href = data.video_url;
+    downloadLink.style.display = 'block';
+
+    let msg = `Done — ${data.duration}s, background: ${data.clip_used}.`;
+    if (data.truncated) msg += ' (Narration was longer than 3 minutes, so it was trimmed.)';
+    statusEl.textContent = msg;
+  } catch (err) {
+    statusEl.textContent = err.message;
+    statusEl.className = 'status error';
+  } finally {
+    goBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
