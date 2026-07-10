@@ -2,6 +2,7 @@ import asyncio
 import os
 import random
 import uuid
+import yt_dlp
 
 import edge_tts
 from flask import Flask, render_template, request, jsonify, send_from_directory
@@ -34,6 +35,27 @@ def list_clips():
         return []
     return sorted(f for f in os.listdir(CLIPS_DIR) if f.lower().endswith(valid_ext))
 
+def download_youtube_video(url):
+    opts = {
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+        "outtmpl": os.path.join(CLIPS_DIR, "%(title)s.%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+    }
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info)
+
+    # yt-dlp may have merged into mp4
+    base = os.path.splitext(filename)[0]
+    mp4 = base + ".mp4"
+
+    if os.path.exists(mp4):
+        return os.path.basename(mp4)
+
+    return os.path.basename(filename)
 
 async def synthesize_speech(text: str, voice: str, out_path: str):
     communicate = edge_tts.Communicate(text, voice)
@@ -133,6 +155,27 @@ def generate():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/download_clip", methods=["POST"])
+def download_clip():
+
+    data = request.get_json()
+
+    url = data.get("url", "").strip()
+
+    if not url:
+        return jsonify({"error": "No YouTube URL supplied"}), 400
+
+    try:
+        filename = download_youtube_video(url)
+
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "clips": list_clips()
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)

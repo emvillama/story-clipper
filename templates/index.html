@@ -34,7 +34,8 @@
     margin-bottom: 16px;
   }
   label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
-  textarea {
+  textarea,
+  input[type="text"] {
     width: 100%;
     min-height: 140px;
     background: #0f1115;
@@ -46,7 +47,8 @@
     resize: vertical;
     margin-bottom: 16px;
   }
-  select {
+  select,
+  input[type="text"] {
     width: 100%;
     background: #0f1115;
     color: var(--text);
@@ -106,6 +108,20 @@
       <option value="{{ name }}">{{ name }}</option>
       {% endfor %}
     </select>
+
+    <label for="youtubeUrl">Download Gameplay from YouTube</label>
+    <input
+        id="youtubeUrl"
+        type="text"
+        placeholder="https://www.youtube.com/watch?v=..."
+    >
+
+    <button
+        type="button"
+        id="downloadClip"
+        style="margin-bottom:16px;">
+        Download Clip
+    </button>
 
     <label for="clip">Background clip</label>
     <select id="clip">
@@ -175,6 +191,52 @@ goBtn.addEventListener('click', async () => {
   } finally {
     goBtn.disabled = false;
   }
+});
+
+downloadBtn.addEventListener('click', async () => {
+    const url = document.getElementById('youtubeUrl').value.trim();
+    if (!url) {
+        statusEl.textContent = "Paste a YouTube URL first.";
+        statusEl.className = "status error";
+        return;
+    }
+
+    downloadBtn.disabled = true;
+    statusEl.className = "status";
+    statusEl.textContent = "Downloading video...";
+    
+    try {
+        const res = await fetch('/download_clip', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ url })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || "Download failed");
+        }
+        statusEl.textContent = `Downloaded: ${data.filename}`;
+
+        // Refresh the clip dropdown
+        const clipSelect = document.getElementById('clip');
+        clipSelect.innerHTML =
+            '<option value="">Random from clips/ folder</option>';
+        data.clips.forEach(file => {
+            const option = document.createElement('option');
+            option.value = file;
+            option.textContent = file;
+            clipSelect.appendChild(option);
+        });
+        // Automatically select the new clip
+        clipSelect.value = data.filename;
+    } catch(err) {
+        statusEl.textContent = err.message;
+        statusEl.className = "status error";
+    } finally {
+        downloadBtn.disabled = false;
+    }
 });
 </script>
 </body>
