@@ -12,9 +12,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLIPS_DIR = os.path.join(BASE_DIR, "clips")
 OUTPUT_DIR = os.path.join(BASE_DIR, "static", "output")
 MAX_DURATION_SECONDS = 180  # 3 minute cap
+FONT_DIR = os.path.join(BASE_DIR, "fonts")
 
 os.makedirs(CLIPS_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(FONT_DIR, exist_ok=True)
 
 app = Flask(__name__)
 
@@ -154,6 +156,19 @@ def generate():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def get_font_path():
+    for f in os.listdir(FONT_DIR):
+        if f.lower().endswith((".ttf", ".otf")):
+            return os.path.join(FONT_DIR, f)
+    # fall back to common system fonts if nothing was dropped in fonts/
+    for c in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ]:
+        if os.path.exists(c):
+            return c
+    raise RuntimeError("No font found. Drop a bold .ttf/.otf into the fonts/ folder.")
 
 @app.route("/download_clip", methods=["POST"])
 def download_clip():
