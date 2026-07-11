@@ -6,7 +6,7 @@ import yt_dlp
 
 import edge_tts
 from flask import Flask, render_template, request, jsonify, send_from_directory
-from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips
+from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips, TextClip, CompositeVideoClip
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLIPS_DIR = os.path.join(BASE_DIR, "clips")
@@ -59,10 +59,56 @@ def download_youtube_video(url):
 
     return os.path.basename(filename)
 
-async def synthesize_speech(text: str, voice: str, out_path: str):
+async def synthesize_speech_with_boundaries(text: str, voice: str, out_path: str):
     communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(out_path)
+    boundaries = []
+    with open(out_path, "wb") as f:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                f.write(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                boundaries.append({
+                    "start": chunk["offset"] / 10_000_000,      # ticks -> seconds
+                    "duration": chunk["duration"] / 10_000_000,
+                    "text": chunk["text"],
+                })
+    return boundaries
 
+def chunk_captions(boundaries, words_per_caption=4):
+    captions = []
+    for i in range(0, len(boundaries), words_per_caption):
+        group = boundaries[i:i + words_per_caption]
+        start = group[0]["start"]
+        end = group[-1]["start"] + group[-1]["duration"]
+        text = " ".join(w["text"] for w in group)
+        captions.append({"start": start, "end": end, "text": text})
+    return captions
+
+def build_caption_clips(captions, video_w, video_h, max_duration, font_path):
+    clips = []
+    for cap in captions:
+        start = cap["start"]
+        end = min(cap["end"], max_duration)
+        if start >= max_duration or end <= start:
+            continue
+        txt_clip = (
+            TextClip(
+                font=font_path,
+                text=cap["text"].upper(),
+                font_size=70,
+                color="white",
+                stroke_color="black",
+                stroke_width=6,
+                method="caption",
+                size=(int(video_w * 0.85), None),
+                text_align="center",
+            )
+            .with_start(start)
+            .with_duration(end - start)
+            .with_position(("center", "center"))
+        )
+        clips.append(txt_clip)
+    return clips
 
 def make_vertical(clip, target_w=1080, target_h=1920):
     """Center-crop then resize a clip to fill a 9:16 vertical frame."""
@@ -124,14 +170,22 @@ def generate():
     video_path = os.path.join(OUTPUT_DIR, f"{job_id}_final.mp4")
 
     try:
-        asyncio.run(synthesize_speech(text, voice, audio_path))
+        boundaries = asyncio.run(synthesize_speech_with_boundaries(text, voice, audio_path))
 
         narration = AudioFileClip(audio_path)
         duration = min(narration.duration, MAX_DURATION_SECONDS)
         narration = narration.subclipped(0, duration)
 
         background, used_clip = build_background(duration, chosen_clip)
-        final = background.with_audio(narration)
+        video_with_audio = background.with_audio(narration)
+
+        captions = chunk_captions(boundaries, words_per_caption=4)
+        caption_clips = build_caption_clips(captions, 1080, 1920, duration, get_font_path())
+
+        final = (
+            CompositeVideoClip([video_with_audio, *caption_clips], size=(1080, 1920))
+            if caption_clips else video_with_audio
+        )
 
         final.write_videofile(
             video_path,
