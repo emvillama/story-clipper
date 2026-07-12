@@ -172,23 +172,29 @@ def build_background(duration: float, chosen_clip: str | None, start_mode: str =
         video = source.subclipped(start, start + duration)
     else:
         # Clip is shorter than the narration: start point (random or 0),
-        # then loop/wrap around the clip until covered.
+        # then loop/wrap around the clip until covered. Each loop pass
+        # opens a FRESH VideoFileClip instance rather than reusing the
+        # same object multiple times - reusing one instance across
+        # concatenate_videoclips() shares a single stateful FFmpeg reader,
+        # which under multi-threaded encoding produces corrupted/frozen
+        # output.
         start = random.uniform(0, source.duration) if use_random_start else 0.0
         head = source.subclipped(start, source.duration)
-        wrap = source.subclipped(0, start) if start > 0 else None
 
-        segments = []
-        covered = 0.0
-        # First pass: tail of the clip from the random start point
-        segments.append(head)
-        covered += head.duration
-        # Subsequent passes: full loops (and the wrapped head remainder)
+        segments = [head]
+        covered = head.duration
+
         while covered < duration:
-            if wrap is not None:
+            if start > 0:
+                wrap_source = VideoFileClip(clip_path)
+                wrap = wrap_source.subclipped(0, start)
                 segments.append(wrap)
                 covered += wrap.duration
-            segments.append(source)
-            covered += source.duration
+                if covered >= duration:
+                    break
+            loop_source = VideoFileClip(clip_path)
+            segments.append(loop_source)
+            covered += loop_source.duration
 
         video = concatenate_videoclips(segments) if len(segments) > 1 else segments[0]
         video = video.subclipped(0, duration)
@@ -233,7 +239,7 @@ def generate():
         background, used_clip = build_background(duration, chosen_clip, start_mode)
         video_with_audio = background.with_audio(narration)
 
-        captions = chunk_captions(boundaries, words_per_caption=4)
+        captions = chunk_captions(boundaries, words_per_caption=1)
         caption_clips = build_caption_clips(captions, 1080, 1920, duration, get_font_path())
         print(f"DEBUG: built {len(caption_clips)} caption clips")
 
