@@ -5,6 +5,7 @@ import uuid
 import yt_dlp
 
 import edge_tts
+from faster_whisper import WhisperModel
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips, TextClip, CompositeVideoClip
 
@@ -29,6 +30,19 @@ VOICES = {
     "Ryan (UK, male)": "en-GB-RyanNeural",
     "Sonia (UK, female)": "en-GB-SoniaNeural",
 }
+
+# Whisper model is loaded lazily and cached across requests so we only pay
+# the load cost once per process.
+_whisper_model = None
+
+
+def get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        # "base.en" is a good speed/accuracy tradeoff for narration audio.
+        # Bump to "small.en" for tighter sync at the cost of slower inference.
+        _whisper_model = WhisperModel("base.en", device="cpu", compute_type="int8")
+    return _whisper_model
 
 
 def list_clips():
@@ -59,41 +73,34 @@ def download_youtube_video(url):
 
     return os.path.basename(filename)
 
-async def synthesize_speech_with_boundaries(text: str, voice: str, out_path: str):
+async def synthesize_speech(text: str, voice: str, out_path: str):
+    """Write the narration audio to disk. Word timing is no longer derived
+    from edge-tts boundary events (they're unreliable/sentence-level only) -
+    instead we transcribe the finished audio with Whisper afterward."""
     communicate = edge_tts.Communicate(text, voice)
-    sentence_boundaries = []
     with open(out_path, "wb") as f:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 f.write(chunk["data"])
-            elif chunk["type"] in ("WordBoundary", "SentenceBoundary"):
-                sentence_boundaries.append({
-                    "start": chunk["offset"] / 10_000_000,
-                    "duration": chunk["duration"] / 10_000_000,
-                    "text": chunk["text"],
-                })
-    return words_from_sentences(sentence_boundaries)
 
 
-def words_from_sentences(sentence_boundaries):
-    """Approximate per-word timing by splitting each sentence/word boundary
-    proportionally across its words, weighted by word length."""
+def transcribe_word_boundaries(audio_path):
+    """Run the synthesized narration through Whisper to get real,
+    audio-aligned word-level timestamps instead of interpolated guesses."""
+    model = get_whisper_model()
+    segments, _ = model.transcribe(audio_path, word_timestamps=True)
+
     word_boundaries = []
-    for sb in sentence_boundaries:
-        words = sb["text"].split()
-        if not words:
-            continue
-        weights = [len(w) + 1 for w in words]  # +1 so short words still get some time
-        total_weight = sum(weights)
-        cursor = sb["start"]
-        for w, wt in zip(words, weights):
-            wdur = sb["duration"] * (wt / total_weight)
+    for seg in segments:
+        for word in seg.words:
+            text = word.word.strip()
+            if not text:
+                continue
             word_boundaries.append({
-                "start": cursor,
-                "duration": wdur,
-                "text": w,
+                "start": word.start,
+                "duration": word.end - word.start,
+                "text": text,
             })
-            cursor += wdur
     return word_boundaries
 
 def chunk_captions(boundaries, words_per_caption=4):
@@ -193,8 +200,10 @@ def generate():
     video_path = os.path.join(OUTPUT_DIR, f"{job_id}_final.mp4")
 
     try:
-        boundaries = asyncio.run(synthesize_speech_with_boundaries(text, voice, audio_path))
-        print(f"DEBUG: got {len(boundaries)} word boundaries")
+        asyncio.run(synthesize_speech(text, voice, audio_path))
+
+        boundaries = transcribe_word_boundaries(audio_path)
+        print(f"DEBUG: got {len(boundaries)} word boundaries (whisper)")
 
         narration = AudioFileClip(audio_path)
         duration = min(narration.duration, MAX_DURATION_SECONDS)
