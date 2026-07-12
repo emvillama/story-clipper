@@ -12,7 +12,6 @@ from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips, TextCl
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLIPS_DIR = os.path.join(BASE_DIR, "clips")
 OUTPUT_DIR = os.path.join(BASE_DIR, "static", "output")
-MAX_DURATION_SECONDS = 180  # 3 minute cap
 FONT_DIR = os.path.join(BASE_DIR, "fonts")
 
 os.makedirs(CLIPS_DIR, exist_ok=True)
@@ -103,7 +102,7 @@ def transcribe_word_boundaries(audio_path):
             })
     return word_boundaries
 
-def chunk_captions(boundaries, words_per_caption=4):
+def chunk_captions(boundaries, words_per_caption=1):
     captions = []
     for i in range(0, len(boundaries), words_per_caption):
         group = boundaries[i:i + words_per_caption]
@@ -158,20 +157,42 @@ def make_vertical(clip, target_w=1080, target_h=1920):
     return clip.resized((target_w, target_h))
 
 
-def build_background(duration: float, chosen_clip: str | None):
+def build_background(duration: float, chosen_clip: str | None, start_mode: str = "random"):
     clip_name = chosen_clip or random.choice(list_clips())
     clip_path = os.path.join(CLIPS_DIR, clip_name)
     source = VideoFileClip(clip_path)
+    use_random_start = start_mode != "beginning"
 
-    # Loop the source clip until it's at least as long as the narration
-    segments = []
-    covered = 0.0
-    while covered < duration:
-        segments.append(source)
-        covered += source.duration
+    if source.duration > duration:
+        # Clip is longer than we need: either jump to a random start point
+        # so we don't always use the same opening seconds, or start at 0
+        # if the caller asked for the beginning explicitly.
+        max_start = source.duration - duration
+        start = random.uniform(0, max_start) if use_random_start else 0.0
+        video = source.subclipped(start, start + duration)
+    else:
+        # Clip is shorter than the narration: start point (random or 0),
+        # then loop/wrap around the clip until covered.
+        start = random.uniform(0, source.duration) if use_random_start else 0.0
+        head = source.subclipped(start, source.duration)
+        wrap = source.subclipped(0, start) if start > 0 else None
 
-    video = concatenate_videoclips(segments) if len(segments) > 1 else source
-    video = video.subclipped(0, duration)
+        segments = []
+        covered = 0.0
+        # First pass: tail of the clip from the random start point
+        segments.append(head)
+        covered += head.duration
+        # Subsequent passes: full loops (and the wrapped head remainder)
+        while covered < duration:
+            if wrap is not None:
+                segments.append(wrap)
+                covered += wrap.duration
+            segments.append(source)
+            covered += source.duration
+
+        video = concatenate_videoclips(segments) if len(segments) > 1 else segments[0]
+        video = video.subclipped(0, duration)
+
     video = make_vertical(video)
     video = video.without_audio()
     return video, clip_name
@@ -188,6 +209,7 @@ def generate():
     text = (data.get("text") or "").strip()
     voice_key = data.get("voice") or next(iter(VOICES))
     chosen_clip = data.get("clip") or None
+    start_mode = data.get("start_mode") or "random"  # "random" or "beginning"
 
     if not text:
         return jsonify({"error": "No text provided."}), 400
@@ -206,10 +228,9 @@ def generate():
         print(f"DEBUG: got {len(boundaries)} word boundaries (whisper)")
 
         narration = AudioFileClip(audio_path)
-        duration = min(narration.duration, MAX_DURATION_SECONDS)
-        narration = narration.subclipped(0, duration)
+        duration = narration.duration
 
-        background, used_clip = build_background(duration, chosen_clip)
+        background, used_clip = build_background(duration, chosen_clip, start_mode)
         video_with_audio = background.with_audio(narration)
 
         captions = chunk_captions(boundaries, words_per_caption=4)
@@ -235,12 +256,10 @@ def generate():
         background.close()
         final.close()
 
-        truncated = narration.duration >= MAX_DURATION_SECONDS
         return jsonify({
             "video_url": f"/static/output/{job_id}_final.mp4",
             "clip_used": used_clip,
             "duration": round(duration, 1),
-            "truncated": truncated,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

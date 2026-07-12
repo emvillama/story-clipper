@@ -225,7 +225,6 @@ goBtn.addEventListener('click', async () => {
     downloadLink.style.display = 'block';
 
     let msg = `Done — ${data.duration}s, background: ${data.clip_used}.`;
-    if (data.truncated) msg += ' (Narration was longer than 3 minutes, so it was trimmed.)';
     statusEl.textContent = msg;
   } catch (err) {
     statusEl.textContent = err.message;
