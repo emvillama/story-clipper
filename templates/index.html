@@ -91,6 +91,28 @@
     font-size: 0.9rem;
   }
   .clip-warning { font-size: 0.8rem; color: var(--muted); margin-top: -8px; margin-bottom: 16px; }
+  .toggle-group {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .toggle-btn {
+    flex: 1;
+    width: auto;
+    background: #0f1115;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .toggle-btn.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
 </style>
 </head>
 <body>
@@ -134,6 +156,12 @@
     <div class="clip-warning">No clips found. Drop .mp4 files into the <code>clips/</code> folder, then refresh this page.</div>
     {% endif %}
 
+    <label>Clip start point</label>
+    <div class="toggle-group">
+      <button type="button" class="toggle-btn active" id="startRandomBtn" data-mode="random">Random point</button>
+      <button type="button" class="toggle-btn" id="startBeginningBtn" data-mode="beginning">Beginning</button>
+    </div>
+
     <button id="go">Generate video</button>
     <div class="status" id="status"></div>
   </div>
@@ -148,6 +176,19 @@ const statusEl = document.getElementById('status');
 const preview = document.getElementById('preview');
 const downloadLink = document.getElementById('downloadLink');
 const downloadBtn = document.getElementById('downloadClip');
+const startRandomBtn = document.getElementById('startRandomBtn');
+const startBeginningBtn = document.getElementById('startBeginningBtn');
+
+let startMode = 'random';
+
+function setStartMode(mode) {
+  startMode = mode;
+  startRandomBtn.classList.toggle('active', mode === 'random');
+  startBeginningBtn.classList.toggle('active', mode === 'beginning');
+}
+
+startRandomBtn.addEventListener('click', () => setStartMode('random'));
+startBeginningBtn.addEventListener('click', () => setStartMode('beginning'));
 
 goBtn.addEventListener('click', async () => {
   const text = document.getElementById('text').value.trim();
@@ -170,7 +211,7 @@ goBtn.addEventListener('click', async () => {
     const res = await fetch('/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice, clip })
+      body: JSON.stringify({ text, voice, clip, start_mode: startMode })
     });
     const data = await res.json();
 
