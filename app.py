@@ -61,18 +61,40 @@ def download_youtube_video(url):
 
 async def synthesize_speech_with_boundaries(text: str, voice: str, out_path: str):
     communicate = edge_tts.Communicate(text, voice)
-    boundaries = []
+    sentence_boundaries = []
     with open(out_path, "wb") as f:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 f.write(chunk["data"])
-            elif chunk["type"] == "WordBoundary":
-                boundaries.append({
-                    "start": chunk["offset"] / 10_000_000,      # ticks -> seconds
+            elif chunk["type"] in ("WordBoundary", "SentenceBoundary"):
+                sentence_boundaries.append({
+                    "start": chunk["offset"] / 10_000_000,
                     "duration": chunk["duration"] / 10_000_000,
                     "text": chunk["text"],
                 })
-    return boundaries
+    return words_from_sentences(sentence_boundaries)
+
+
+def words_from_sentences(sentence_boundaries):
+    """Approximate per-word timing by splitting each sentence/word boundary
+    proportionally across its words, weighted by word length."""
+    word_boundaries = []
+    for sb in sentence_boundaries:
+        words = sb["text"].split()
+        if not words:
+            continue
+        weights = [len(w) + 1 for w in words]  # +1 so short words still get some time
+        total_weight = sum(weights)
+        cursor = sb["start"]
+        for w, wt in zip(words, weights):
+            wdur = sb["duration"] * (wt / total_weight)
+            word_boundaries.append({
+                "start": cursor,
+                "duration": wdur,
+                "text": w,
+            })
+            cursor += wdur
+    return word_boundaries
 
 def chunk_captions(boundaries, words_per_caption=4):
     captions = []
@@ -102,6 +124,7 @@ def build_caption_clips(captions, video_w, video_h, max_duration, font_path):
                 method="caption",
                 size=(int(video_w * 0.85), None),
                 text_align="center",
+                margin=(20, 20),
             )
             .with_start(start)
             .with_duration(end - start)
@@ -171,6 +194,7 @@ def generate():
 
     try:
         boundaries = asyncio.run(synthesize_speech_with_boundaries(text, voice, audio_path))
+        print(f"DEBUG: got {len(boundaries)} word boundaries")
 
         narration = AudioFileClip(audio_path)
         duration = min(narration.duration, MAX_DURATION_SECONDS)
@@ -181,6 +205,7 @@ def generate():
 
         captions = chunk_captions(boundaries, words_per_caption=4)
         caption_clips = build_caption_clips(captions, 1080, 1920, duration, get_font_path())
+        print(f"DEBUG: built {len(caption_clips)} caption clips")
 
         final = (
             CompositeVideoClip([video_with_audio, *caption_clips], size=(1080, 1920))
